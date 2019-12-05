@@ -103,7 +103,7 @@ func (pq *PriorityQueue) init() {
 	heap.Init(&pq.queue)
 }
 
-func (pq PriorityQueue) Len() int {
+func (pq *PriorityQueue) Len() int {
 	return len(pq.queue.items)
 }
 
