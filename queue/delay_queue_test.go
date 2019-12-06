@@ -40,3 +40,13 @@ func TestDelayQueue_Pop(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 }
+
+func TestSelect(t *testing.T) {
+	start := time.Now()
+	c := make(chan time.Duration)
+	select {
+	case c <- time.Now().Sub(start):
+	default:
+		t.Logf("default")
+	}
+}
