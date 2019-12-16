@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -11,8 +12,13 @@ type Demo struct {
 	Exp  time.Time
 }
 
-func (d *Demo) GetDelay() time.Time {
-	return d.Exp
+func (d *Demo) GetDelay() time.Duration {
+	now := time.Now()
+	if now.After(d.Exp) {
+		return -1
+	} else {
+		return d.Exp.Sub(now)
+	}
 }
 
 func TestDelayQueue_Pop(t *testing.T) {
@@ -29,13 +35,14 @@ func TestDelayQueue_Pop(t *testing.T) {
 	}
 
 	dq := NewDelay()
+	ctx, _ := context.WithTimeout(context.Background(), 3*time.Second)
 	go func() {
-		g := dq.Pop().(*Demo)
+		g := dq.Pop(ctx).(*Demo)
 		t.Logf("=============time:%v;g.msg:%v;g.time:%v", time.Now().Second(), g.Msg, g.Time)
 	}()
 	dq.Offer(d1)
 	dq.Offer(d2)
-	g2 := dq.Pop().(*Demo)
+	g2 := dq.Pop(ctx).(*Demo)
 	t.Logf("time:%v;g.msg:%v;g.time:%v", time.Now().Second(), g2.Msg, g2.Time)
 
 	time.Sleep(1 * time.Second)

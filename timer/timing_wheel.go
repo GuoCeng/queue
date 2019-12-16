@@ -1,1 +1,96 @@
 package timer
+
+import (
+	"sync"
+	"time"
+
+	"github.com/GuoCeng/time-wheel/queue"
+)
+
+const DEFAULT_LEVEL = 6
+
+type TimingWheel struct {
+	mu            sync.Mutex
+	tickMs        time.Duration
+	wheelSize     int
+	startMs       time.Duration
+	taskCounter   int64
+	q             *queue.DelayQueue
+	interval      time.Duration
+	buckets       []*TaskList
+	currentTime   time.Duration
+	overflowWheel *TimingWheel
+	level         int
+}
+
+func NewTimingWheel(tickMs time.Duration, wheelSize int, startMs time.Duration, taskCounter int64, q *queue.DelayQueue, level int) *TimingWheel {
+	buckets := make([]*TaskList, wheelSize)
+	for i := 0; i < wheelSize; i++ {
+		buckets[i] = NewTaskList(taskCounter)
+	}
+	timingWheel := &TimingWheel{
+		tickMs:      tickMs,
+		wheelSize:   wheelSize,
+		startMs:     startMs,
+		taskCounter: taskCounter,
+		q:           q,
+		interval:    time.Duration(wheelSize) * tickMs,
+		buckets:     buckets,
+		currentTime: startMs - (startMs % tickMs),
+		level:       level,
+	}
+	if level > DEFAULT_LEVEL {
+		timingWheel.addOverflowWheel()
+	}
+	return timingWheel
+}
+
+func (t *TimingWheel) addOverflowWheel() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.overflowWheel == nil {
+		t.overflowWheel = NewTimingWheel(t.interval, t.wheelSize, t.currentTime, t.taskCounter, t.q, t.level+1)
+	}
+}
+
+func (t *TimingWheel) add(entry *TaskEntry) bool {
+	exp := entry.expirationMs
+	if entry.cancelled() {
+		// Cancelled
+		return false
+	} else if exp < t.currentTime+t.tickMs {
+		// Already expired
+		return false
+	} else if exp < t.currentTime+t.interval {
+		// Put in its own bucket
+		virtualId := exp / t.tickMs
+		bucket := t.buckets[(int64(virtualId) % int64(t.wheelSize))]
+		bucket.add(entry)
+		if bucket.setExpiration(time.Now().Add(virtualId * t.tickMs)) {
+			// The bucket needs to be enqueued because it was an expired bucket
+			// We only need to enqueue the bucket when its expiration time has changed, i.e. the wheel has advanced
+			// and the previous buckets gets reused; further calls to set the expiration within the same wheel cycle
+			// will pass in the same value and hence return false, thus the bucket with the same expiration will not
+			// be enqueued multiple times.
+			t.q.Offer(bucket)
+		}
+		return true
+	} else {
+		// Out of the interval. Put it into the parent timer
+		if t.overflowWheel == nil {
+			t.addOverflowWheel()
+		}
+		return t.overflowWheel.add(entry)
+	}
+}
+
+// Try to advance the clock
+func (t *TimingWheel) advanceClock(timeMs time.Duration) {
+	if timeMs >= t.currentTime+t.tickMs {
+		t.currentTime = timeMs - (timeMs % t.tickMs)
+	}
+	// Try to advance the clock of the overflow wheel if present
+	if t.overflowWheel != nil {
+		t.overflowWheel.advanceClock(t.currentTime)
+	}
+}

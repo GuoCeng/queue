@@ -32,9 +32,11 @@ func (pq priorityQueue) Less(i, j int) bool {
 }
 
 func (pq priorityQueue) Swap(i, j int) {
-	pq.items[i], pq.items[j] = pq.items[j], pq.items[i]
-	pq.items[i].index = i
-	pq.items[j].index = j
+	if pq.Len() > 1 {
+		pq.items[i], pq.items[j] = pq.items[j], pq.items[i]
+		pq.items[i].index = i
+		pq.items[j].index = j
+	}
 }
 
 func (pq *priorityQueue) Push(x interface{}) {

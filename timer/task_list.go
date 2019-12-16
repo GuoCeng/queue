@@ -2,17 +2,17 @@ package timer
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 type Task struct {
-	mu sync.Mutex
-	delayMs time.Duration
+	mu        sync.Mutex
+	delayMs   time.Duration
 	taskEntry *TaskEntry
+	run       func()
 }
 
-func (t *Task) cancel() {
+func (t *Task) Cancel() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.taskEntry != nil {
@@ -30,12 +30,28 @@ func (t *Task) setTaskEntry(entry *TaskEntry) {
 	t.taskEntry = entry
 }
 
+func NewTask(delayMs time.Duration, r func()) *Task {
+	return &Task{
+		delayMs: delayMs,
+		run:     r,
+	}
+}
+
+func NewTaskEntry(task *Task, exp time.Duration) *TaskEntry {
+	taskEntry := &TaskEntry{
+		expirationMs: exp,
+		task:         task,
+	}
+	taskEntry.clearTask()
+	return taskEntry
+}
+
 type TaskEntry struct {
 	expirationMs time.Duration
-	task *Task
-	list *TaskList
-	next *TaskEntry
-	prev *TaskEntry
+	task         *Task
+	list         *TaskList
+	next         *TaskEntry
+	prev         *TaskEntry
 }
 
 func (t *TaskEntry) clearTask() {
@@ -50,13 +66,13 @@ func (t *TaskEntry) cancelled() bool {
 
 func (t *TaskEntry) remove() {
 	currentList := t.list
-	for ;currentList != nil; {
-		//currentList.remove(this)
+	for currentList != nil {
+		currentList.remove(t)
 		currentList = t.list
 	}
 }
 
-func (t *TaskEntry) compare(x *TaskEntry) int {
+/*func (t *TaskEntry) compare(x *TaskEntry) int {
 	if t.expirationMs > x.expirationMs {
 		return 1
 	} else if t.expirationMs == x.expirationMs {
@@ -65,12 +81,23 @@ func (t *TaskEntry) compare(x *TaskEntry) int {
 		return -1
 	}
 
+}*/
+
+func NewTaskList(taskCounter int64) *TaskList {
+	tl := &TaskList{
+		taskCounter: taskCounter,
+	}
+	tl.initRoot()
+	return tl
 }
 
 type TaskList struct {
+	mu          sync.Mutex
+	flushMu     sync.Mutex
+	removeMu    sync.Mutex
 	taskCounter int64
-	root *TaskEntry
-	expiration time.Duration
+	root        *TaskEntry
+	expiration  time.Time
 }
 
 func (t *TaskList) initRoot() {
@@ -79,114 +106,85 @@ func (t *TaskList) initRoot() {
 	t.root.prev = t.root
 }
 
-func (t *TaskList) setExpiration(e time.Duration) bool {
-	atomic.t.expiration.(e)
-}
-private[timer] class TimerTaskList(taskCounter: AtomicInteger) extends Delayed {
-
-// TimerTaskList forms a doubly linked cyclic list using a dummy root entry
-// root.next points to the head
-// root.prev points to the tail
-private[this] val root = new TimerTaskEntry(null, -1)
-root.next = root
-root.prev = root
-
-private[this] val expiration = new AtomicLong(-1L)
-
-// Set the bucket's expiration time
-// Returns true if the expiration time is changed
-def setExpiration(expirationMs: Long): Boolean = {
-expiration.getAndSet(expirationMs) != expirationMs
+func (t *TaskList) setExpiration(e time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	old := t.expiration
+	t.expiration = e
+	return old != e
 }
 
-// Get the bucket's expiration time
-def getExpiration(): Long = {
-expiration.get()
+func (t *TaskList) Foreach(f func(task *Task)) {
+	entry := t.root.next
+	for entry != t.root {
+		nextEntry := entry.next
+		if !entry.cancelled() {
+			f(entry.task)
+		}
+		entry = nextEntry
+	}
 }
 
-// Apply the supplied function to each of tasks in this list
-def foreach(f: (TimerTask)=>Unit): Unit = {
-synchronized {
-var entry = root.next
-while (entry ne root) {
-val nextEntry = entry.next
-
-if (!entry.cancelled) f(entry.timerTask)
-
-entry = nextEntry
-}
-}
-}
-
-// Add a timer task entry to this list
-def add(timerTaskEntry: TimerTaskEntry): Unit = {
-var done = false
-while (!done) {
-// Remove the timer task entry if it is already in any other list
-// We do this outside of the sync block below to avoid deadlocking.
-// We may retry until timerTaskEntry.list becomes null.
-timerTaskEntry.remove()
-
-synchronized {
-timerTaskEntry.synchronized {
-if (timerTaskEntry.list == null) {
-// put the timer task entry to the end of the list. (root.prev points to the tail entry)
-val tail = root.prev
-timerTaskEntry.next = root
-timerTaskEntry.prev = tail
-timerTaskEntry.list = this
-tail.next = timerTaskEntry
-root.prev = timerTaskEntry
-taskCounter.incrementAndGet()
-done = true
-}
-}
-}
-}
+func (t *TaskList) add(task *TaskEntry) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	task.remove()
+	if task.list == nil {
+		tail := t.root.prev
+		task.next = t.root
+		task.prev = tail
+		task.list = t
+		tail.next = task
+		t.root.prev = task
+		t.taskCounter++
+	}
 }
 
-// Remove the specified timer task entry from this list
-def remove(timerTaskEntry: TimerTaskEntry): Unit = {
-synchronized {
-timerTaskEntry.synchronized {
-if (timerTaskEntry.list eq this) {
-timerTaskEntry.next.prev = timerTaskEntry.prev
-timerTaskEntry.prev.next = timerTaskEntry.next
-timerTaskEntry.next = null
-timerTaskEntry.prev = null
-timerTaskEntry.list = null
-taskCounter.decrementAndGet()
-}
-}
-}
+func (t *TaskList) remove(task *TaskEntry) {
+	t.removeMu.Lock()
+	defer t.removeMu.Unlock()
+	if task.list == t {
+		task.next.prev = task.prev
+		task.prev.next = task.next
+		task.next = nil
+		task.prev = nil
+		task.list = nil
+		t.taskCounter--
+	}
 }
 
-// Remove all task entries and apply the supplied function to each of them
-def flush(f: (TimerTaskEntry)=>Unit): Unit = {
-synchronized {
-var head = root.next
-while (head ne root) {
-remove(head)
-f(head)
-head = root.next
-}
-expiration.set(-1L)
-}
-}
+var empty = time.Time{}
 
-def getDelay(unit: TimeUnit): Long = {
-unit.convert(max(getExpiration - Time.SYSTEM.hiResClockMs, 0), TimeUnit.MILLISECONDS)
+func (t *TaskList) flush(f func(e *TaskEntry)) {
+	t.flushMu.Lock()
+	defer t.flushMu.Unlock()
+	head := t.root.next
+	for head != t.root {
+		t.remove(head)
+		f(head)
+		head = t.root.next
+	}
+	t.expiration = empty
 }
 
-def compareTo(d: Delayed): Int = {
-
-val other = d.asInstanceOf[TimerTaskList]
-
-if(getExpiration < other.getExpiration) -1
-else if(getExpiration > other.getExpiration) 1
-else 0
+func (t *TaskList) GetDelay() time.Duration {
+	now := time.Now()
+	if now.After(t.expiration) {
+		return -1
+	}
+	return t.expiration.Sub(now)
 }
 
-}
-
-
+/*func (t *TaskList) compareTo(d queue.Delayed) int {
+	tl, ok := d.(*TaskList)
+	if !ok {
+		panic("can not convert to TaskList")
+	}
+	if t.expiration.Before(tl.expiration) {
+		return -1
+	} else if t.expiration.After(tl.expiration) {
+		return 1
+	} else {
+		return 0
+	}
+}*/

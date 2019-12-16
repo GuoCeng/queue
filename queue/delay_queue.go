@@ -1,12 +1,14 @@
 package queue
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 )
 
 type Delayed interface {
-	GetDelay() time.Time
+	GetDelay() time.Duration
 }
 
 func NewDelay() *DelayQueue {
@@ -25,14 +27,7 @@ type DelayQueue struct {
 func (dq *DelayQueue) Offer(e Delayed) {
 	dq.mu.Lock()
 	defer dq.mu.Unlock()
-	var delay time.Duration
-	now := time.Now()
-	delayed := e.GetDelay()
-	if now.Before(delayed) {
-		delay = delayed.Sub(now)
-	} else {
-		delay = 0
-	}
+	delay := e.GetDelay()
 	i := &Item{
 		Value:    e,
 		Priority: int64(delay),
@@ -41,11 +36,12 @@ func (dq *DelayQueue) Offer(e Delayed) {
 	if dq.q.Len() == 1 {
 		go func() {
 			dq.available <- struct{}{}
+			fmt.Println("dq.available doing")
 		}()
 	}
 }
 
-func (dq *DelayQueue) Pop() interface{} {
+func (dq *DelayQueue) Pop(ctx context.Context) interface{} {
 	var delayTime time.Duration
 Start:
 	dq.mu.Lock()
@@ -55,25 +51,27 @@ Start:
 		goto Wait
 	} else {
 		if delayed, ok := first.Value.(Delayed); ok {
-			now := time.Now()
 			delay := delayed.GetDelay()
-			if now.After(delay) {
+			if delay <= 0 {
 				dq.mu.Unlock()
 				item := dq.q.Pop().(*Item)
 				return item.Value
 			} else {
-				delayTime = delay.Sub(now)
+				delayTime = delay
 				dq.mu.Unlock()
-				goto Sleep
+				goto Wait
 			}
 		}
 	}
 
 Wait:
-	<-dq.available
-	goto Start
-
-Sleep:
-	<-time.After(delayTime)
-	goto Start
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-dq.available:
+		fmt.Println("get dq.available")
+		goto Start
+	case <-time.After(delayTime):
+		goto Start
+	}
 }
