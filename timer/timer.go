@@ -63,7 +63,7 @@ type SystemTimer struct {
 func (t *SystemTimer) Add(task *Task) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	t.addTimerTaskEntry(NewTaskEntry(task, task.delayMs+time.Duration(time.Now().Nanosecond())))
+	t.addTimerTaskEntry(NewTaskEntry(task, time.Now().Add(task.delayMs)))
 }
 
 func (t *SystemTimer) addTimerTaskEntry(taskEntry *TaskEntry) {

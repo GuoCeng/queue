@@ -1,6 +1,7 @@
 package timer
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,9 +40,6 @@ func NewTimingWheel(tickMs time.Duration, wheelSize int, startMs time.Duration, 
 		currentTime: startMs - (startMs % tickMs),
 		level:       level,
 	}
-	if level > DEFAULT_LEVEL {
-		timingWheel.addOverflowWheel()
-	}
 	return timingWheel
 }
 
@@ -54,7 +52,7 @@ func (t *TimingWheel) addOverflowWheel() {
 }
 
 func (t *TimingWheel) add(entry *TaskEntry) bool {
-	exp := entry.expirationMs
+	exp := entry.exp.Sub(time.Now())
 	if entry.cancelled() {
 		// Cancelled
 		return false
@@ -73,6 +71,7 @@ func (t *TimingWheel) add(entry *TaskEntry) bool {
 			// will pass in the same value and hence return false, thus the bucket with the same expiration will not
 			// be enqueued multiple times.
 			t.q.Offer(bucket)
+			fmt.Println("test========")
 		}
 		return true
 	} else {

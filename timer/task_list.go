@@ -37,21 +37,21 @@ func NewTask(delayMs time.Duration, r func()) *Task {
 	}
 }
 
-func NewTaskEntry(task *Task, exp time.Duration) *TaskEntry {
+func NewTaskEntry(task *Task, exp time.Time) *TaskEntry {
 	taskEntry := &TaskEntry{
-		expirationMs: exp,
-		task:         task,
+		exp:  exp,
+		task: task,
 	}
 	taskEntry.clearTask()
 	return taskEntry
 }
 
 type TaskEntry struct {
-	expirationMs time.Duration
-	task         *Task
-	list         *TaskList
-	next         *TaskEntry
-	prev         *TaskEntry
+	exp  time.Time
+	task *Task
+	list *TaskList
+	next *TaskEntry
+	prev *TaskEntry
 }
 
 func (t *TaskEntry) clearTask() {
