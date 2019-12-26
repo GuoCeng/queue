@@ -2,42 +2,73 @@ package timer
 
 import (
 	"sync"
-	"time"
+	"sync/atomic"
+
+	unit "github.com/GuoCeng/time-wheel/timer/time-unit"
 )
 
-type Task struct {
-	mu        sync.Mutex
-	delayMs   time.Duration
+type Task interface {
+	GetID() int64
+	GetDelay() int64
+	Cancel()
+	SetTaskEntry(entry *TaskEntry)
+	GetTaskEntry() *TaskEntry
+	Run()
+}
+
+type SimpleTask struct {
+	mu        sync.RWMutex
+	id        int
+	delayMs   int64
 	taskEntry *TaskEntry
 	run       func()
 }
 
-func (t *Task) Cancel() {
+func (t *SimpleTask) GetID() int64 {
+	return t.delayMs
+}
+
+func (t *SimpleTask) GetDelay() int64 {
+	return t.delayMs
+}
+
+func (t *SimpleTask) Cancel() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.taskEntry != nil {
-		t.taskEntry.remove()
+		t.taskEntry.Remove()
 	}
 	t.taskEntry = nil
 }
 
-func (t *Task) setTaskEntry(entry *TaskEntry) {
+func (t *SimpleTask) SetTaskEntry(entry *TaskEntry) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.taskEntry != nil && t.taskEntry != entry {
-		t.taskEntry.remove()
+		t.taskEntry.Remove()
 	}
 	t.taskEntry = entry
 }
 
-func NewTask(delayMs time.Duration, r func()) *Task {
-	return &Task{
+func (t *SimpleTask) GetTaskEntry() *TaskEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.taskEntry
+}
+
+func (t *SimpleTask) Run() {
+	t.run()
+}
+
+func NewSimpleTask(id int, delayMs int64, r func()) *SimpleTask {
+	return &SimpleTask{
+		id:      id,
 		delayMs: delayMs,
 		run:     r,
 	}
 }
 
-func NewTaskEntry(task *Task, exp time.Time) *TaskEntry {
+func NewTaskEntry(task Task, exp int64) *TaskEntry {
 	taskEntry := &TaskEntry{
 		exp:  exp,
 		task: task,
@@ -47,8 +78,9 @@ func NewTaskEntry(task *Task, exp time.Time) *TaskEntry {
 }
 
 type TaskEntry struct {
-	exp  time.Time
-	task *Task
+	Mu   sync.Mutex
+	exp  int64
+	task Task
 	list *TaskList
 	next *TaskEntry
 	prev *TaskEntry
@@ -56,15 +88,15 @@ type TaskEntry struct {
 
 func (t *TaskEntry) clearTask() {
 	if t.task != nil {
-		t.task.setTaskEntry(t)
+		t.task.SetTaskEntry(t)
 	}
 }
 
 func (t *TaskEntry) cancelled() bool {
-	return t.task.taskEntry != t
+	return t.task.GetTaskEntry() != t
 }
 
-func (t *TaskEntry) remove() {
+func (t *TaskEntry) Remove() {
 	currentList := t.list
 	for currentList != nil {
 		currentList.remove(t)
@@ -72,20 +104,9 @@ func (t *TaskEntry) remove() {
 	}
 }
 
-/*func (t *TaskEntry) compare(x *TaskEntry) int {
-	if t.expirationMs > x.expirationMs {
-		return 1
-	} else if t.expirationMs == x.expirationMs {
-		return 0
-	} else {
-		return -1
-	}
-
-}*/
-
-func NewTaskList(taskCounter int64) *TaskList {
+func NewTaskList(c *int64) *TaskList {
 	tl := &TaskList{
-		taskCounter: taskCounter,
+		taskCounter: c,
 	}
 	tl.initRoot()
 	return tl
@@ -95,9 +116,9 @@ type TaskList struct {
 	mu          sync.Mutex
 	flushMu     sync.Mutex
 	removeMu    sync.Mutex
-	taskCounter int64
+	taskCounter *int64
 	root        *TaskEntry
-	expiration  time.Time
+	expiration  int64
 }
 
 func (t *TaskList) initRoot() {
@@ -106,7 +127,7 @@ func (t *TaskList) initRoot() {
 	t.root.prev = t.root
 }
 
-func (t *TaskList) setExpiration(e time.Time) bool {
+func (t *TaskList) setExpiration(e int64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	old := t.expiration
@@ -114,7 +135,7 @@ func (t *TaskList) setExpiration(e time.Time) bool {
 	return old != e
 }
 
-func (t *TaskList) Foreach(f func(task *Task)) {
+func (t *TaskList) Foreach(f func(task Task)) {
 	entry := t.root.next
 	for entry != t.root {
 		nextEntry := entry.next
@@ -126,9 +147,11 @@ func (t *TaskList) Foreach(f func(task *Task)) {
 }
 
 func (t *TaskList) add(task *TaskEntry) {
+	task.Remove()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	task.remove()
+	task.Mu.Lock()
+	defer task.Mu.Unlock()
 	if task.list == nil {
 		tail := t.root.prev
 		task.next = t.root
@@ -136,24 +159,26 @@ func (t *TaskList) add(task *TaskEntry) {
 		task.list = t
 		tail.next = task
 		t.root.prev = task
-		t.taskCounter++
+		atomic.AddInt64(t.taskCounter, 1)
 	}
 }
 
 func (t *TaskList) remove(task *TaskEntry) {
 	t.removeMu.Lock()
 	defer t.removeMu.Unlock()
+	task.Mu.Lock()
+	defer task.Mu.Unlock()
 	if task.list == t {
 		task.next.prev = task.prev
 		task.prev.next = task.next
 		task.next = nil
 		task.prev = nil
 		task.list = nil
-		t.taskCounter--
+		atomic.AddInt64(t.taskCounter, -1)
 	}
 }
 
-var empty = time.Time{}
+var empty int64 = -1
 
 func (t *TaskList) flush(f func(e *TaskEntry)) {
 	t.flushMu.Lock()
@@ -167,24 +192,13 @@ func (t *TaskList) flush(f func(e *TaskEntry)) {
 	t.expiration = empty
 }
 
-func (t *TaskList) GetDelay() time.Duration {
-	now := time.Now()
-	if now.After(t.expiration) {
-		return -1
-	}
-	return t.expiration.Sub(now)
+func (t *TaskList) GetDelay(u *unit.TimeUnit) int64 {
+	return u.Convert(max(t.expiration-unit.HiResClockMs(), 0), unit.MILLISECONDS)
 }
 
-/*func (t *TaskList) compareTo(d queue.Delayed) int {
-	tl, ok := d.(*TaskList)
-	if !ok {
-		panic("can not convert to TaskList")
+func max(x, y int64) int64 {
+	if x > y {
+		return x
 	}
-	if t.expiration.Before(tl.expiration) {
-		return -1
-	} else if t.expiration.After(tl.expiration) {
-		return 1
-	} else {
-		return 0
-	}
-}*/
+	return y
+}

@@ -3,7 +3,9 @@ package timer
 import (
 	"context"
 	"sync"
-	"time"
+	"sync/atomic"
+
+	unit "github.com/GuoCeng/time-wheel/timer/time-unit"
 
 	"github.com/GuoCeng/time-wheel/queue"
 )
@@ -15,7 +17,7 @@ type Timer interface {
 	 * (beginning from the time of submission)
 	 * @param timerTask the task to add
 	 */
-	Add(timerTask *Task)
+	Add(timerTask Task)
 
 	/**
 	   * Advance the internal clock, executing any tasks whose expiration has been
@@ -23,7 +25,7 @@ type Timer interface {
 	  *          * @param timeoutMs
 	  *          * @return whether or not any tasks were executed
 	*/
-	AdvanceClock(timeoutMs time.Duration) bool
+	AdvanceClock(ctx context.Context) bool
 
 	/**
 	 * Get the number of tasks pending execution
@@ -37,41 +39,43 @@ type Timer interface {
 	Shutdown()
 }
 
-func NewSystemTimer(tickMs time.Duration, wheelSize int) *SystemTimer {
-	startMs := time.Duration(time.Now().Nanosecond())
+func NewSystemTimer(tickMs int64, wheelSize int) *SystemTimer {
+	startMs := unit.HiResClockMs()
 	q := queue.NewDelay()
+	c := new(int64)
 	return &SystemTimer{
 		tickMs:      tickMs,
 		wheelSize:   wheelSize,
 		startMs:     startMs,
 		delayQueue:  q,
-		taskCounter: 0,
-		timingWheel: NewTimingWheel(tickMs, wheelSize, startMs, 0, q, 0),
+		taskCounter: c,
+		timingWheel: NewTimingWheel(tickMs, wheelSize, startMs, c, q),
 	}
 }
 
 type SystemTimer struct {
 	mu          sync.RWMutex
-	tickMs      time.Duration
+	tickMs      int64
 	wheelSize   int
-	startMs     time.Duration
+	startMs     int64
 	delayQueue  *queue.DelayQueue
-	taskCounter int64
+	taskCounter *int64
 	timingWheel *TimingWheel
 }
 
-func (t *SystemTimer) Add(task *Task) {
+func (t *SystemTimer) Add(task Task) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	t.addTimerTaskEntry(NewTaskEntry(task, time.Now().Add(task.delayMs)))
+	t.addTimerTaskEntry(NewTaskEntry(task, task.GetDelay()+unit.HiResClockMs()))
 }
 
 func (t *SystemTimer) addTimerTaskEntry(taskEntry *TaskEntry) {
 	if !t.timingWheel.add(taskEntry) {
 		// Already expired or cancelled
 		if !taskEntry.cancelled() {
+			//fmt.Printf("任务ID[%v]-当前时间[%v]-任务时间[%v]，已过期，直接执行 \n", taskEntry.task.GetID(), unit.HiResClockMs(), taskEntry.exp)
 			go func() {
-				taskEntry.task.run()
+				taskEntry.task.Run()
 			}()
 		}
 	}
@@ -86,13 +90,11 @@ func (t *SystemTimer) AdvanceClock(ctx context.Context) bool {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			for v != nil {
-				t.timingWheel.advanceClock(v.GetDelay())
+				t.timingWheel.advanceClock(v.expiration)
 				v.flush(func(e *TaskEntry) {
-					go func() {
-						e.task.run()
-					}()
+					t.addTimerTaskEntry(e)
 				})
-				x := t.delayQueue.Pop(ctx)
+				x := t.delayQueue.Poll()
 				if x != nil {
 					v = x.(*TaskList)
 				} else {
@@ -108,9 +110,7 @@ func (t *SystemTimer) AdvanceClock(ctx context.Context) bool {
 }
 
 func (t *SystemTimer) Size() int64 {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.taskCounter
+	return atomic.LoadInt64(t.taskCounter)
 }
 
 func (t *SystemTimer) Shutdown() {

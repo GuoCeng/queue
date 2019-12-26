@@ -2,13 +2,14 @@ package queue
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
+
+	unit "github.com/GuoCeng/time-wheel/timer/time-unit"
 )
 
 type Delayed interface {
-	GetDelay() time.Duration
+	GetDelay(*unit.TimeUnit) int64
 }
 
 func NewDelay() *DelayQueue {
@@ -27,16 +28,15 @@ type DelayQueue struct {
 func (dq *DelayQueue) Offer(e Delayed) {
 	dq.mu.Lock()
 	defer dq.mu.Unlock()
-	delay := e.GetDelay()
+	delay := e.GetDelay(unit.NANOSECONDS)
 	i := &Item{
 		Value:    e,
-		Priority: int64(delay),
+		Priority: delay,
 	}
 	dq.q.Push(i)
 	if dq.q.Len() == 1 {
 		go func() {
 			dq.available <- struct{}{}
-			fmt.Println("dq.available doing")
 		}()
 	}
 }
@@ -51,13 +51,13 @@ Start:
 		goto Wait
 	} else {
 		if delayed, ok := first.Value.(Delayed); ok {
-			delay := delayed.GetDelay()
+			delay := delayed.GetDelay(unit.NANOSECONDS)
 			if delay <= 0 {
 				dq.mu.Unlock()
 				item := dq.q.Pop().(*Item)
 				return item.Value
 			} else {
-				delayTime = delay
+				delayTime = time.Duration(delay * unit.MilliScale)
 				dq.mu.Unlock()
 				goto Wait
 			}
@@ -69,9 +69,29 @@ Wait:
 	case <-ctx.Done():
 		return nil
 	case <-dq.available:
-		fmt.Println("get dq.available")
 		goto Start
 	case <-time.After(delayTime):
 		goto Start
+	}
+}
+
+func (dq *DelayQueue) Poll() interface{} {
+	dq.mu.Lock()
+	defer dq.mu.Unlock()
+	first, ok := dq.q.Peek().(*Item)
+	if !ok {
+		return nil
+	} else {
+		if delayed, ok := first.Value.(Delayed); ok {
+			delay := delayed.GetDelay(unit.NANOSECONDS)
+			if delay <= 0 {
+				item := dq.q.Pop().(*Item)
+				return item.Value
+			} else {
+				return nil
+			}
+		} else {
+			return nil
+		}
 	}
 }
