@@ -31,8 +31,14 @@ var (
 //go:linkname runtimeNano runtime.nanotime
 func runtimeNano() int64
 
+//获取当前时间int64值，单位为毫秒，精度为毫秒
 func HiResClockMs() int64 {
 	return NANOSECONDS.ToMillis(runtimeNano())
+}
+
+//获取当前时间int64值，单位为毫秒，精度为秒（忽略毫秒数）
+func ClockMs() int64 {
+	return NANOSECONDS.ToSeconds(runtimeNano()) * 1000
 }
 
 func GetHiResClockMs(now time.Time) int64 {

@@ -1,8 +1,10 @@
 package timer
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	unit "github.com/GuoCeng/time-wheel/timer/time-unit"
 )
@@ -18,14 +20,14 @@ type Task interface {
 
 type SimpleTask struct {
 	mu        sync.RWMutex
-	id        int
+	id        int64
 	delayMs   int64
 	taskEntry *TaskEntry
 	run       func()
 }
 
 func (t *SimpleTask) GetID() int64 {
-	return t.delayMs
+	return t.id
 }
 
 func (t *SimpleTask) GetDelay() int64 {
@@ -60,7 +62,7 @@ func (t *SimpleTask) Run() {
 	t.run()
 }
 
-func NewSimpleTask(id int, delayMs int64, r func()) *SimpleTask {
+func NewSimpleTask(id int64, delayMs int64, r func()) *SimpleTask {
 	return &SimpleTask{
 		id:      id,
 		delayMs: delayMs,
@@ -78,12 +80,10 @@ func NewTaskEntry(task Task, exp int64) *TaskEntry {
 }
 
 type TaskEntry struct {
-	Mu   sync.Mutex
-	exp  int64
+	mu   sync.Mutex
+	exp  int64 //毫秒数
 	task Task
 	list *TaskList
-	next *TaskEntry
-	prev *TaskEntry
 }
 
 func (t *TaskEntry) clearTask() {
@@ -92,113 +92,98 @@ func (t *TaskEntry) clearTask() {
 	}
 }
 
-func (t *TaskEntry) cancelled() bool {
-	return t.task.GetTaskEntry() != t
+func (t *TaskEntry) setList(list *TaskList) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.list = list
 }
 
 func (t *TaskEntry) Remove() {
-	currentList := t.list
-	for currentList != nil {
-		currentList.remove(t)
-		currentList = t.list
-	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.list = nil
+}
+
+func (t *TaskEntry) cancelled() bool {
+	return t.task.GetTaskEntry() != t
 }
 
 func NewTaskList(c *int64) *TaskList {
 	tl := &TaskList{
 		taskCounter: c,
 	}
-	tl.initRoot()
 	return tl
 }
 
+var mu sync.Mutex
+
 type TaskList struct {
 	mu          sync.Mutex
-	flushMu     sync.Mutex
-	removeMu    sync.Mutex
+	flag        bool
 	taskCounter *int64
-	root        *TaskEntry
+	entries     []*TaskEntry
 	expiration  int64
 }
 
-func (t *TaskList) initRoot() {
-	t.root = &TaskEntry{}
-	t.root.next = t.root
-	t.root.prev = t.root
+func (t *TaskList) setFlag(b bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.flag = b
 }
 
+// 如果两个时间放到了时间轮的相同层的相同刻度中，刷新过期时间时，要比较是否比之前的过期时间小，如果小的话才更新，
+// 因为如果把大的过期时间更新上去，会导致获取到TaskList时，里面的所有任务都过期了，
+// 这样子在N层时间轮之后，时间间隔较大的地方，会出现相差很久的两个任务，却同时执行了
+// 返回值为是否已经放入了延时队列中，防止重复放入
 func (t *TaskList) setExpiration(e int64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	old := t.expiration
-	t.expiration = e
-	return old != e
-}
-
-func (t *TaskList) Foreach(f func(task Task)) {
-	entry := t.root.next
-	for entry != t.root {
-		nextEntry := entry.next
-		if !entry.cancelled() {
-			f(entry.task)
-		}
-		entry = nextEntry
+	if old == 0 || old == empty || (old != empty && old > e) {
+		t.expiration = e
 	}
+	//log.Println(t.flag, old, e, t.expiration, len(t.entries))
+	return t.flag
 }
 
 func (t *TaskList) add(task *TaskEntry) {
-	task.Remove()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	task.Mu.Lock()
-	defer task.Mu.Unlock()
-	if task.list == nil {
-		tail := t.root.prev
-		task.next = t.root
-		task.prev = tail
-		task.list = t
-		tail.next = task
-		t.root.prev = task
-		atomic.AddInt64(t.taskCounter, 1)
-	}
+	mu.Lock()
+	defer mu.Unlock()
+	task.setList(t)
+	atomic.AddInt64(t.taskCounter, 1)
+	t.entries = append(t.entries, task)
 }
 
 func (t *TaskList) remove(task *TaskEntry) {
-	t.removeMu.Lock()
-	defer t.removeMu.Unlock()
-	task.Mu.Lock()
-	defer task.Mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	if task.list == t {
-		task.next.prev = task.prev
-		task.prev.next = task.next
-		task.next = nil
-		task.prev = nil
-		task.list = nil
+		task.Remove()
+		for idx, entry := range t.entries {
+			if entry == task {
+				t.entries[idx] = nil
+				t.entries = append(t.entries[:idx], t.entries[idx+1:]...)
+				break
+			}
+		}
 		atomic.AddInt64(t.taskCounter, -1)
 	}
 }
 
-var empty int64 = -1
+var empty int64 = math.MaxInt64
 
-func (t *TaskList) flush(f func(e *TaskEntry)) {
-	t.flushMu.Lock()
-	defer t.flushMu.Unlock()
-	head := t.root.next
-	for head != t.root {
-		t.remove(head)
-		f(head)
-		head = t.root.next
+func (t *TaskList) flush() []*TaskEntry {
+	mu.Lock()
+	var entries = make([]*TaskEntry, len(t.entries))
+	copy(entries, t.entries)
+	mu.Unlock()
+	for _, entry := range entries {
+		t.remove(entry)
 	}
 	t.expiration = empty
+	return entries
 }
 
-func (t *TaskList) GetDelay(u *unit.TimeUnit) int64 {
-	return u.Convert(max(t.expiration-unit.HiResClockMs(), 0), unit.MILLISECONDS)
-}
-
-func max(x, y int64) int64 {
-	if x > y {
-		return x
-	}
-	return y
+func (t *TaskList) GetDelay() time.Duration {
+	return time.Duration(t.expiration-unit.HiResClockMs()) * time.Millisecond
 }

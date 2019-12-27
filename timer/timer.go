@@ -40,7 +40,7 @@ type Timer interface {
 }
 
 func NewSystemTimer(tickMs int64, wheelSize int) *SystemTimer {
-	startMs := unit.HiResClockMs()
+	startMs := unit.ClockMs()
 	q := queue.NewDelay()
 	c := new(int64)
 	return &SystemTimer{
@@ -61,19 +61,22 @@ type SystemTimer struct {
 	delayQueue  *queue.DelayQueue
 	taskCounter *int64
 	timingWheel *TimingWheel
+	entries     []*TaskEntry
 }
 
 func (t *SystemTimer) Add(task Task) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	t.addTimerTaskEntry(NewTaskEntry(task, task.GetDelay()+unit.HiResClockMs()))
+	entry := NewTaskEntry(task, unit.ClockMs()+task.GetDelay())
+	t.addTimerTaskEntry(entry)
+	t.entries = append(t.entries, entry)
 }
 
+//将任务插入时间轮中，如果发现任务超时，则执行
 func (t *SystemTimer) addTimerTaskEntry(taskEntry *TaskEntry) {
 	if !t.timingWheel.add(taskEntry) {
 		// Already expired or cancelled
 		if !taskEntry.cancelled() {
-			//fmt.Printf("任务ID[%v]-当前时间[%v]-任务时间[%v]，已过期，直接执行 \n", taskEntry.task.GetID(), unit.HiResClockMs(), taskEntry.exp)
 			go func() {
 				taskEntry.task.Run()
 			}()
@@ -83,17 +86,24 @@ func (t *SystemTimer) addTimerTaskEntry(taskEntry *TaskEntry) {
 
 // Advances the clock if there is an expired bucket. If there isn't any expired bucket when called,
 // waits up to timeoutMs before giving up.
+// 收割时间轮，通过延时队列获取对象，如果未返回，则表明未到收割时间，返回的话，就将各圈中的任务进行重新分配，分配过程中将已过期的任务执行掉
 func (t *SystemTimer) AdvanceClock(ctx context.Context) bool {
 	bucket := t.delayQueue.Pop(ctx)
 	if bucket != nil {
 		if v, ok := bucket.(*TaskList); ok {
+			v.setFlag(false)
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			for v != nil {
-				t.timingWheel.advanceClock(v.expiration)
-				v.flush(func(e *TaskEntry) {
-					t.addTimerTaskEntry(e)
-				})
+				//推进时间轮时间
+				t.timingWheel.advanceClock(unit.HiResClockMs())
+				//刷新对象，将时间轮各圈中的对象，重新分配各圈中相应的位置
+				entries := v.flush()
+				for _, e := range entries {
+					if e != nil {
+						t.addTimerTaskEntry(e)
+					}
+				}
 				x := t.delayQueue.Poll()
 				if x != nil {
 					v = x.(*TaskList)
@@ -114,5 +124,5 @@ func (t *SystemTimer) Size() int64 {
 }
 
 func (t *SystemTimer) Shutdown() {
-
+	t.delayQueue.Release()
 }

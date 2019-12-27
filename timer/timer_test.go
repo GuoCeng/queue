@@ -12,23 +12,23 @@ func TestSystemTimer_AdvanceClock(t *testing.T) {
 	timer := NewSystemTimer(1, 20)
 	fmt.Printf("开始时间：%v \n", time.Now())
 
-	timer.Add(NewSimpleTask(1, 2000, func() {
+	timer.Add(NewSimpleTask(1, 1000, func() {
 		fmt.Printf("%v-执行时间：%v \n", 1, time.Now())
 	}))
 
-	timer.Add(NewSimpleTask(2, 3000, func() {
+	timer.Add(NewSimpleTask(2, 2000, func() {
 		fmt.Printf("%v-执行时间：%v \n", 2, time.Now())
 	}))
 
-	timer.Add(NewSimpleTask(3, 4000, func() {
+	timer.Add(NewSimpleTask(3, 3000, func() {
 		fmt.Printf("%v-执行时间：%v \n", 3, time.Now())
 	}))
 
-	timer.Add(NewSimpleTask(4, 5000, func() {
+	timer.Add(NewSimpleTask(4, 4000, func() {
 		fmt.Printf("%v-执行时间：%v \n", 4, time.Now())
 	}))
 
-	timer.Add(NewSimpleTask(5, 6000, func() {
+	timer.Add(NewSimpleTask(5, 5000, func() {
 		fmt.Printf("%v-执行时间：%v \n", 5, time.Now())
 	}))
 

@@ -68,7 +68,6 @@ func (e *Entry) GetDelay() int64 {
 	e.Prev = e.Next
 	e.Next = next
 	e.delayMs = next.Sub(t).Milliseconds()
-	//fmt.Printf("ID[%v] next millisecond = %v, now = %v, next = %v\n", e.ID, e.delayMs, t, e.Next)
 	return e.delayMs
 }
 func (e *Entry) Cancel() {
@@ -97,10 +96,6 @@ func (e *Entry) GetTaskEntry() *timer.TaskEntry {
 func (e *Entry) Run() {
 	e.WrappedJob.Run()
 	e.cron.timer.Add(e)
-	/*go func() {
-		e.cron.cycle <- e
-		//log.Printf("entry[%v] push to cycle", e.ID)
-	}()*/
 	//log.Println("run", "now", time.Now(), "entry", e.ID, "next", e.Next)
 }
 
@@ -205,22 +200,8 @@ func (c *Cron) Run() {
 // run the scheduler.. this is private just due to the need to synchronize
 // access to the 'running' state variable.
 func (c *Cron) run() {
-	//log.Println("start")
-
-	/*go func() {
-		for c.running {
-			select {
-			case e := <-c.cycle:
-				c.timer.Add(e)
-				//log.Printf("entry[%v] rejoin cron", e.ID)
-			case <-time.After(100 * time.Millisecond):
-				continue
-			}
-		}
-	}()*/
-
 	for c.running {
-		ctx, _ := context.WithTimeout(context.Background(), 1000*time.Millisecond)
+		ctx, _ := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		c.timer.AdvanceClock(ctx)
 	}
 }

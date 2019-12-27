@@ -7,9 +7,9 @@ import (
 
 // An Item is something we manage in a priority queue.
 type Item struct {
-	Value    interface{} // The value of the item; arbitrary.
-	Priority int64       // The priority of the item in the queue.
-	index    int         // The index of the item in the heap. The index is needed by update and is maintained by the heap.Interface methods.
+	Value    interface{}  // The value of the item; arbitrary.
+	Priority func() int64 // The priority of the item in the queue.
+	index    int          // The index of the item in the heap. The index is needed by update and is maintained by the heap.Interface methods.
 }
 
 func (i *Item) Index() int {
@@ -28,7 +28,7 @@ func (pq priorityQueue) Len() int { return len(pq.items) }
 func (pq priorityQueue) Less(i, j int) bool {
 	// We want Pop to give us the highest, not lowest, priority so we use greater than here.
 	// 这边跟heap包中的不同，这里希望返回Priority最小的
-	return pq.items[i].Priority < pq.items[j].Priority
+	return pq.items[i].Priority() < pq.items[j].Priority()
 }
 
 func (pq priorityQueue) Swap(i, j int) {
@@ -75,7 +75,7 @@ func (pq *priorityQueue) remove() {
 }
 
 // update modifies the priority and value of an Item in the queue.
-func (pq *priorityQueue) update(item *Item, value interface{}, priority int64) {
+func (pq *priorityQueue) update(item *Item, value interface{}, priority func() int64) {
 	item.Value = value
 	item.Priority = priority
 	heap.Fix(pq, item.index)
@@ -136,7 +136,7 @@ func (pq *PriorityQueue) Peek() interface{} {
 	return item
 }
 
-func (pq *PriorityQueue) Update(item *Item, value interface{}, priority int64) {
+func (pq *PriorityQueue) Update(item *Item, value interface{}, priority func() int64) {
 	pq.queue.update(item, value, priority)
 }
 
