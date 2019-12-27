@@ -102,7 +102,7 @@ func (e *Entry) Run() {
 func New(opts ...Option) *Cron {
 	c := &Cron{
 		entries:   make(map[EntryID]*Entry),
-		chain:     NewChain(Recover()),
+		chain:     NewChain(),
 		stop:      make(chan struct{}),
 		running:   false,
 		cycle:     make(chan *Entry),

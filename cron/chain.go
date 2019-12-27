@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/GuoCeng/time-wheel/logging"
 )
 
 // JobWrapper decorates the given Job with some behavior.
@@ -36,7 +38,7 @@ func (c Chain) Then(j Job) Job {
 }
 
 // Recover panics in wrapped jobs and log them with the provided logger.
-func Recover() JobWrapper {
+func Recover(logger logging.Logger) JobWrapper {
 	return func(j Job) Job {
 		return FuncJob(func() {
 			defer func() {
@@ -48,7 +50,7 @@ func Recover() JobWrapper {
 					if !ok {
 						err = fmt.Errorf("%v", r)
 					}
-					log.Fatalf(err.Error(), "panic", "stack", "...\n"+string(buf))
+					logger.Error(err, "panic", "stack", "...\n"+string(buf))
 				}
 			}()
 			j.Run()
