@@ -61,15 +61,18 @@ type SystemTimer struct {
 	delayQueue  *queue.DelayQueue
 	taskCounter *int64
 	timingWheel *TimingWheel
-	entries     []*TaskEntry
 }
 
 func (t *SystemTimer) Add(task Task) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	entry := NewTaskEntry(task, unit.ClockMs()+task.GetDelay())
+	var entry *TaskEntry
+	if entry = task.GetTaskEntry(); entry == nil {
+		entry = NewTaskEntry(task, unit.ClockMs()+task.GetDelay())
+	} else {
+		entry.exp = unit.ClockMs() + task.GetDelay()
+	}
 	t.addTimerTaskEntry(entry)
-	t.entries = append(t.entries, entry)
 }
 
 //将任务插入时间轮中，如果发现任务超时，则执行
@@ -91,7 +94,6 @@ func (t *SystemTimer) AdvanceClock(ctx context.Context) bool {
 	bucket := t.delayQueue.Pop(ctx)
 	if bucket != nil {
 		if v, ok := bucket.(*TaskList); ok {
-			v.setFlag(false)
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			for v != nil {

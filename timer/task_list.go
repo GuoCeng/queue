@@ -101,7 +101,10 @@ func (t *TaskEntry) setList(list *TaskList) {
 func (t *TaskEntry) Remove() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.list = nil
+	if t.list != nil {
+		t.list.remove(t)
+		t.list = nil
+	}
 }
 
 func (t *TaskEntry) cancelled() bool {
@@ -119,16 +122,9 @@ var mu sync.Mutex
 
 type TaskList struct {
 	mu          sync.Mutex
-	flag        bool
 	taskCounter *int64
 	entries     []*TaskEntry
 	expiration  int64
-}
-
-func (t *TaskList) setFlag(b bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.flag = b
 }
 
 // 如果两个时间放到了时间轮的相同层的相同刻度中，刷新过期时间时，要比较是否比之前的过期时间小，如果小的话才更新，
@@ -142,26 +138,25 @@ func (t *TaskList) setExpiration(e int64) bool {
 	if old == 0 || old == empty || (old != empty && old > e) {
 		t.expiration = e
 	}
-	//log.Println(t.flag, old, e, t.expiration, len(t.entries))
-	return t.flag
+	return old == e
 }
 
-func (t *TaskList) add(task *TaskEntry) {
+func (t *TaskList) add(entry *TaskEntry) {
 	mu.Lock()
 	defer mu.Unlock()
-	task.setList(t)
+	entry.setList(t)
 	atomic.AddInt64(t.taskCounter, 1)
-	t.entries = append(t.entries, task)
+	t.entries = append(t.entries, entry)
 }
 
-func (t *TaskList) remove(task *TaskEntry) {
+func (t *TaskList) remove(entry *TaskEntry) {
 	mu.Lock()
 	defer mu.Unlock()
-	if task.list == t {
-		task.Remove()
-		for idx, entry := range t.entries {
-			if entry == task {
+	if entry.list == t {
+		for idx, e := range t.entries {
+			if e == entry {
 				t.entries[idx] = nil
+				e.list = nil
 				t.entries = append(t.entries[:idx], t.entries[idx+1:]...)
 				break
 			}

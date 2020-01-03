@@ -96,7 +96,6 @@ func (e *Entry) GetTaskEntry() *timer.TaskEntry {
 func (e *Entry) Run() {
 	e.WrappedJob.Run()
 	e.cron.timer.Add(e)
-	//log.Println("run", "now", time.Now(), "entry", e.ID, "next", e.Next)
 }
 
 func New(opts ...Option) *Cron {

@@ -432,18 +432,27 @@ func TestCron(t *testing.T) {
 		}
 	}()
 	cron := New()
-	cron.AddFunc("3 * * * * *", func() {
-		log.Println("3-time")
+	/*cron.AddFunc("3 * * * * *", func() {
+		//log.Println("3-time")
 	})
 	cron.AddFunc("30 * * * * *", func() {
-		log.Println("30-time")
+		//log.Println("30-time")
 	})
 	cron.AddFunc("0/5 * * * * *", func() {
-		log.Println("0/5-time")
+		//log.Println("0/5-time")
 	})
 
 	cron.AddFunc("1/10 * * * * *", func() {
-		log.Println("1/10-time")
+		//log.Println("1/10-time")
+	})*/
+	cron.AddFunc("0/1 * * * * *", func() {
+		log.Println("0/1-time")
+	})
+	cron.AddFunc("0/2 * * * * *", func() {
+		log.Println("0/2-time")
+	})
+	cron.AddFunc("0/3 * * * * *", func() {
+		log.Println("0/3-time")
 	})
 	fmt.Printf("开始时间：%v \n", time.Now())
 	cron.Run()

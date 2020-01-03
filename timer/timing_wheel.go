@@ -62,10 +62,8 @@ func (t *TimingWheel) add(entry *TaskEntry) bool {
 		virtualId := (expiration - t.currentTime) / t.tickMs
 		bucket := t.buckets[int64(virtualId)%int64(t.wheelSize)]
 		bucket.add(entry)
-		//log.Println(entry.task.GetID(), expiration, t.currentTime, t.tickMs, len(bucket.entries))
 		// 设置延时队列对象的超时时间，用当前添加对象的时间作为超时时间
 		if !bucket.setExpiration(unit.HiResClockMs() + virtualId*t.tickMs) {
-			//fmt.Println(entry.task.GetID(), expiration, t.currentTime+t.tickMs, unit.ClockMs(), virtualId, t.tickMs, "exp", bucket.expiration)
 			// The bucket needs to be enqueued because it was an expired bucket
 			// We only need to enqueue the bucket when its expiration time has changed, i.e. the wheel has advanced
 			// and the previous buckets gets reused; further calls to set the expiration within the same wheel cycle
@@ -73,7 +71,6 @@ func (t *TimingWheel) add(entry *TaskEntry) bool {
 			// be enqueued multiple times.
 			// 插入延时队列
 			t.q.Offer(bucket)
-			bucket.setFlag(true)
 		}
 		return true
 	} else {
